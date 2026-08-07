@@ -1,0 +1,125 @@
+# =============================================================================
+# go-mysqlbinlog-to-es 标准配置模板（脱敏示例）
+# =============================================================================
+# 使用步骤：
+#   1. 复制本文件为 river.toml
+#        cp configs/river.toml.example configs/river.toml
+#   2. 将下方 CHANGE_ME / 示例地址改为真实环境
+#   3. 切勿将含真实密码的 river.toml 提交到 Git
+#
+# 仓库：https://github.com/JasonYe88/go-mysqlbinlog-to-es
+# 详细说明：docs/configuration.md
+# JSON 映射：docs/json-mapping.md
+# =============================================================================
+
+# ---------- 复制身份（必填）----------
+# MySQL 伪从库 server_id，全局唯一，且 > 0。
+# 同一台 MySQL 上若有多个同步实例，每个实例必须不同。
+server_id = 1001
+
+# ---------- MySQL 连接（必填）----------
+# 格式 host:port，不要写 jdbc: 或 mysql://
+my_addr = "127.0.0.1:3306"
+my_user = "repl_user"
+# 密码请填写真实值；本模板仅作占位，勿使用示例口令上生产
+my_pass = "CHANGE_ME_MYSQL_PASSWORD"
+# 可选：字符集，默认建议 utf8mb4
+# my_charset = "utf8mb4"
+
+# ---------- Elasticsearch 连接（必填）----------
+# 仅 host:port，不要带 http:// 或 https://
+# 若使用 HTTPS，另设 es_https = true（视程序版本支持情况）
+es_addr = "127.0.0.1:9200"
+es_user = "elastic"
+es_pass = "CHANGE_ME_ES_PASSWORD"
+# es_https = false
+
+# ---------- 运行目录与监控 ----------
+# 位点文件 master.info 所在目录（Docker 内常用 /app/var）
+data_dir = "/app/var"
+# Prometheus metrics 监听；Docker 映射宿主机 12801 -> 容器 12800
+stat_addr = "0.0.0.0:12800"
+stat_path = "/metrics"
+
+# ---------- 引擎与全量 dump ----------
+# mysql 或 mariadb
+flavor = "mysql"
+# 全量工具名；空字符串 "" 表示跳过 dump，只跟 binlog
+mysqldump = "mysqldump"
+# 无 SUPER/--master-data 权限时设为 true
+# skip_master_data = false
+# Bulk 批量条数；0 表示使用程序默认
+bulk_size = 0
+# skip_no_pk_table = false
+
+# =============================================================================
+# [[source]]：决定 dump 哪些表、binlog 关注哪些表
+# 可配置多段；每张要同步的表必须出现在某个 source.tables 中
+# =============================================================================
+[[source]]
+schema = "fms"
+tables = ["test_mysql_go_to_es"]
+# 也支持正则/通配（与上游一致），例如：
+# tables = ["order_\\d+", "t_[0-9]{4}"]
+
+# =============================================================================
+# [[rule]]：表 -> ES 索引映射（可多段，一张表一条规则）
+# schema + table 必须能在上面的 [[source]] 中找到
+# =============================================================================
+[[rule]]
+schema = "fms"
+table = "test_mysql_go_to_es"
+# ES 索引名
+index = "test_mysql_go_to_es"
+# ES7+ 文档类型一般用 _doc
+type = "_doc"
+# 可选：只同步这些列（白名单）；不配则按 field 与默认列逻辑处理
+# filter = ["id", "dataJson"]
+# 可选：文档 _id 由这些列拼接；不配则用表主键
+# id = ["id"]
+# 可选：ES ingest pipeline
+# pipeline = "my_pipeline"
+
+# -----------------------------------------------------------------------------
+# [rule.field]：字段映射
+#   左边 = MySQL 列名，或 JSON 路径（带点的 key 必须加双引号）
+#   右边 = ES 字段名；可带修饰符 ,list / ,date
+#
+# 常见写法：
+#   id = "id"                              # 普通列
+#   title = "es_title"                     # 列重命名
+#   tags = "tags,list"                     # 按逗号拆成数组
+#   created_at = ",date"                   # 日期解析
+#   dataJson = "dataJson"                  # 整列 JSON 写入 ES（新键可进动态 mapping）
+#   "dataJson.sku" = "sku"                 # 只取 JSON 内字段，拍平到顶层
+#   "dataJson.sku" = "data.sku"            # 写入嵌套对象 data.sku
+# -----------------------------------------------------------------------------
+[rule.field]
+id = "id"
+"dataJson.sku" = "data.sku"
+"dataJson.skuName" = "skuName"
+
+# =============================================================================
+# 多表示例（复制下面整段并改名即可）
+# =============================================================================
+# [[source]]
+# schema = "biz"
+# tables = ["orders", "order_items"]
+#
+# [[rule]]
+# schema = "biz"
+# table = "orders"
+# index = "biz_orders"
+# type = "_doc"
+# [rule.field]
+# id = "id"
+# order_no = "orderNo"
+#
+# [[rule]]
+# schema = "biz"
+# table = "order_items"
+# index = "biz_order_items"
+# type = "_doc"
+# [rule.field]
+# id = "id"
+# "ext.sku" = "sku"

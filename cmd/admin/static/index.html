@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>River 映射配置</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="brand">go-mysqlbinlog-to-es</p>
+      <h1>MySQL → ES 映射配置</h1>
+    </div>
+    <div class="actions-wrap">
+      <div class="actions">
+        <button id="btnReload" type="button" class="ghost">重新加载</button>
+        <button id="btnSave" type="button" class="primary">保存到 river.toml</button>
+        <button id="btnRestore" type="button" class="ghost">回退备份</button>
+        <button id="btnRestart" type="button" class="accent">重启同步容器</button>
+        <button id="btnOpenLogs" type="button" class="ghost">查看日志</button>
+      </div>
+      <div class="dump-bar">
+        <label class="check-inline">
+          <input type="checkbox" id="chkFullDump" />
+          下次启动先全量 dump
+        </label>
+        <span id="syncStateHint" class="hint dump-hint">位点状态加载中…</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="mode-tabs" aria-label="编辑模式">
+    <button type="button" class="mode-tab active" data-mode="form" id="tabForm">表单编辑</button>
+    <button type="button" class="mode-tab" data-mode="raw" id="tabRaw">原始 TOML</button>
+  </nav>
+
+  <main class="layout" id="modeForm">
+    <section class="panel">
+      <h2>连接信息</h2>
+      <div class="conn-split">
+        <div class="conn-col">
+          <h3 class="conn-title">MySQL</h3>
+          <div class="conn-fields">
+            <label>MySQL 地址<input id="my_addr" /></label>
+            <label>MySQL 用户<input id="my_user" /></label>
+            <label>MySQL 密码<input id="my_pass" type="password" /></label>
+            <label>server_id<input id="server_id" type="number" /></label>
+          </div>
+        </div>
+        <div class="conn-col">
+          <h3 class="conn-title">Elasticsearch</h3>
+          <div class="conn-fields">
+            <label>ES 地址<input id="es_addr" /></label>
+            <label>ES 用户<input id="es_user" /></label>
+            <label>ES 密码<input id="es_pass" type="password" /></label>
+            <label>data_dir<input id="data_dir" /></label>
+          </div>
+        </div>
+      </div>
+      <p class="hint">保存后会写回 toml；改连接信息后建议重启同步容器。</p>
+    </section>
+
+    <section class="panel">
+      <div class="row-between">
+        <h2>同步规则</h2>
+        <button id="btnAddRule" type="button" class="ghost">+ 新增表规则</button>
+      </div>
+      <div id="ruleTabs" class="tabs"></div>
+      <div id="ruleEditor" class="rule-editor"></div>
+    </section>
+
+    <section class="panel">
+      <h2>从 MySQL 读取结构</h2>
+      <div class="grid-3">
+        <label>库
+          <select id="pickSchema"></select>
+        </label>
+        <label>表
+          <select id="pickTable"></select>
+        </label>
+        <div class="inline-actions">
+          <button id="btnLoadSchemas" type="button" class="ghost">刷新库表</button>
+          <button id="btnLoadColumns" type="button" class="primary">加载字段</button>
+          <button id="btnApplyTable" type="button" class="accent">应用到当前规则</button>
+        </div>
+      </div>
+      <div id="columnsBox" class="columns-box"></div>
+    </section>
+  </main>
+
+  <main class="layout hidden" id="modeRaw">
+    <section class="panel">
+      <div class="row-between">
+        <h2>原始 river.toml</h2>
+        <div class="inline-actions">
+          <button id="btnRawReload" type="button" class="ghost">从磁盘重新加载</button>
+          <button id="btnRawSave" type="button" class="primary">保存原文</button>
+        </div>
+      </div>
+      <p class="hint">可直接粘贴整份配置；保存前会校验 TOML，并备份为 bak.1~bak.3。保存后表单模式会同步刷新。</p>
+      <textarea id="rawToml" class="raw-toml" spellcheck="false" placeholder="粘贴或编辑完整 river.toml …"></textarea>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>同步日志 - go-mysqlbinlog-to-es</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="logs-page">
+  <header class="top">
+    <div>
+      <p class="brand">go-mysqlbinlog-to-es</p>
+      <h1>同步日志</h1>
+    </div>
+    <div class="actions">
+      <a class="btn ghost" href="/" target="_self">返回配置</a>
+      <button id="btnLoadLogs" type="button" class="primary">刷新日志</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="inline-actions log-toolbar">
+        <label class="inline-label">来源
+          <select id="logSource">
+            <option value="buffer">进程缓冲</option>
+            <option value="docker">Docker 日志</option>
+          </select>
+        </label>
+        <label class="inline-label">过滤
+          <input id="logFilter" placeholder="error / dump / binlog" />
+        </label>
+        <label class="inline-label">行数
+          <input id="logTail" type="number" value="500" min="50" max="2000" style="width:90px" />
+        </label>
+        <label class="inline-label"><input id="logAuto" type="checkbox" checked /> 自动刷新</label>
+      </div>
+      <pre id="logView" class="log-view log-view-full">加载中…</pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/logs.js"></script>
+</body>
+</html>

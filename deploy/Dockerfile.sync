@@ -1,0 +1,22 @@
+# 同步服务（MySQL binlog -> Elasticsearch）
+FROM golang:1.20-alpine AS builder
+
+WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GO111MODULE=on
+ENV GOSUMDB=off
+ENV CGO_ENABLED=0
+
+RUN apk add --no-cache git gcc musl-dev
+COPY . .
+RUN go build -mod=mod -o /out/go-mysqlbinlog-to-es ./cmd/go-mysqlbinlog-to-es
+
+# 使用 MySQL 5.7 客户端，避免 Alpine/MariaDB 客户端对旧 MySQL 的 TLS 报错
+FROM mysql:5.7
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
+    mkdir -p /app
+COPY --from=builder /out/go-mysqlbinlog-to-es /app/go-mysqlbinlog-to-es
+WORKDIR /app
+ENTRYPOINT ["/app/go-mysqlbinlog-to-es"]
+CMD ["-config=/app/configs/river.toml"]

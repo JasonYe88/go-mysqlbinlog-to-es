@@ -1,0 +1,40 @@
+services:
+  go-mysqlbinlog-to-es:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.sync
+    image: go-mysqlbinlog-to-es:local
+    container_name: go-mysqlbinlog-to-es
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "12801:12800"
+    volumes:
+      # 挂载整个 configs 目录，便于保存时写入 .bak.1~.bak.3 备份
+      - ../configs:/app/configs
+      - ../var:/app/var
+
+  admin:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.admin
+    image: go-mysqlbinlog-to-es-admin:local
+    container_name: go-mysqlbinlog-to-es-admin
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "12802:12802"
+    volumes:
+      # 挂载整个 configs 目录，便于保存时写入 .bak.1~.bak.3 备份
+      - ../configs:/app/configs
+      # 与 sync 共用位点目录，便于「全量 dump」删除 master.info
+      - ../var:/app/var
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - "-addr=:12802"
+      - "-config=/app/configs/river.toml"
+      - "-static=/app/static"
+      - "-restart-container=go-mysqlbinlog-to-es"
+      - "-sync-log-url=http://go-mysqlbinlog-to-es:12800/logs"
