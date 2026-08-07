@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+*.exe
+*.test
+*.out
+var/
+master.info
+*.tmp
+go.sum.bak
+configs/*.bak.*
+configs/*.tmp
+# 真实运行配置含密码，仅提交脱敏模板 river.toml.example
+configs/river.toml

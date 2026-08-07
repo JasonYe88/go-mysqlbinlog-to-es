@@ -1,0 +1,23 @@
+# 配置管理界面
+FROM golang:1.20-alpine AS builder
+
+WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GO111MODULE=on
+ENV GOSUMDB=off
+ENV CGO_ENABLED=0
+
+RUN apk add --no-cache git
+COPY . .
+RUN go build -mod=mod -o /out/admin ./cmd/admin
+
+FROM alpine:latest
+ENV TZ=Asia/Shanghai
+RUN apk add --no-cache ca-certificates tzdata && \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+WORKDIR /app
+COPY --from=builder /out/admin /app/admin
+COPY web/admin/static /app/static
+EXPOSE 12802
+ENTRYPOINT ["/app/admin"]
+CMD ["-addr", ":12802", "-config", "/app/configs/river.toml", "-static", "/app/static", "-restart-container", "go-mysqlbinlog-to-es", "-sync-log-url", "http://go-mysqlbinlog-to-es:12800/logs"]
