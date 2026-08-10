@@ -114,7 +114,7 @@ func saveConfig(path string, c *Config) (string, error) {
 
 	backupNote, err := rotateConfigBackup(path)
 	if err != nil {
-		return "", fmt.Errorf("备份原配置失�? %w", err)
+		return "", fmt.Errorf("备份原配置失败: %w", err)
 	}
 
 	if err := writeConfigBytes(path, buf.Bytes()); err != nil {
@@ -131,11 +131,11 @@ func saveConfigRaw(path string, data []byte) (string, error) {
 		return "", fmt.Errorf("TOML 解析失败: %w", err)
 	}
 	if c.MyAddr == "" || c.ESAddr == "" {
-		return "", fmt.Errorf("配置缺少 my_addr �?es_addr")
+		return "", fmt.Errorf("配置缺少 my_addr 或 es_addr")
 	}
 	backupNote, err := rotateConfigBackup(path)
 	if err != nil {
-		return "", fmt.Errorf("备份原配置失�? %w", err)
+		return "", fmt.Errorf("备份原配置失败: %w", err)
 	}
 	if err := writeConfigBytes(path, data); err != nil {
 		return "", err
@@ -180,7 +180,7 @@ func clearMasterInfo(dataDir string) (string, error) {
 	p := masterInfoPath(dataDir)
 	// Only allow deleting a file named master.info under the configured data_dir.
 	if filepath.Base(p) != "master.info" {
-		return "", fmt.Errorf("拒绝删除�?master.info 路径")
+		return "", fmt.Errorf("拒绝删除非 master.info 路径")
 	}
 	if err := os.Remove(p); err != nil {
 		if os.IsNotExist(err) {
@@ -232,7 +232,7 @@ func rotateConfigBackup(path string) (string, error) {
 	if err := copyFile(path, bak(1)); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("已备份原配置�?%s.bak.1（最多保�?%d 个版本）", base, maxConfigBackups), nil
+	return fmt.Sprintf("已备份原配置为 %s.bak.1（最多保留 %d 个版本）", base, maxConfigBackups), nil
 }
 
 func copyFile(src, dst string) error {
@@ -268,7 +268,7 @@ func listConfigBackups(path string) ([]BackupInfo, error) {
 // restoreConfigBackupSafe reads backup first, then rotates current, then writes.
 func restoreConfigBackupSafe(path string, slot int) error {
 	if slot < 1 || slot > maxConfigBackups {
-		return fmt.Errorf("备份版本仅支�?1~%d", maxConfigBackups)
+		return fmt.Errorf("备份版本仅支持 1~%d", maxConfigBackups)
 	}
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
@@ -281,7 +281,7 @@ func restoreConfigBackupSafe(path string, slot int) error {
 
 	if _, err := os.Stat(path); err == nil {
 		if _, err := rotateConfigBackup(path); err != nil {
-			return fmt.Errorf("回退前备份当前配置失�? %w", err)
+			return fmt.Errorf("回退前备份当前配置失败: %w", err)
 		}
 	}
 

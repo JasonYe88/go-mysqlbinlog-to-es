@@ -115,7 +115,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		msg := "已写�?river.toml。若同步容器正在运行，请点击「重启同步容器」使配置生效�?
+		msg := "已写入 river.toml。若同步容器正在运行，请点击「重启同步容器」使配置生效。"
 		if backupNote != "" {
 			msg = backupNote + " " + msg
 		}
@@ -159,7 +159,7 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
-		msg := "已按原文写入 river.toml。若同步容器正在运行，请点击「重启同步容器」使配置生效�?
+		msg := "已按原文写入 river.toml。若同步容器正在运行，请点击「重启同步容器」使配置生效。"
 		if backupNote != "" {
 			msg = backupNote + " " + msg
 		}
@@ -185,9 +185,9 @@ func (s *Server) handleSyncState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dataDir, masterPath, hasMaster := syncStateFromConfig(c)
-	hint := "无位点（下次启动将全�?dump�?
+	hint := "无位点（下次启动将全量 dump）"
 	if hasMaster {
-		hint = "已有位点（下次启动将跳过 dump，从 binlog 继续�?
+		hint = "已有位点（下次启动将跳过 dump，从 binlog 继续）"
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"data_dir":         dataDir,
@@ -210,7 +210,7 @@ func (s *Server) handleConfigBackups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"backups": list,
 		"max":     maxConfigBackups,
-		"hint":    "bak.1 为最近一次保存前的版本，bak.3 为最�?,
+		"hint":    "bak.1 为最近一次保存前的版本，bak.3 为最旧",
 	})
 }
 
@@ -232,7 +232,7 @@ func (s *Server) handleConfigRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"ok":      "restored",
-		"message": fmt.Sprintf("已回退�?river.toml.bak.%d。请点击「重启同步容器」使配置生效�?, body.Slot),
+		"message": fmt.Sprintf("已回退到 river.toml.bak.%d。请点击「重启同步容器」使配置生效。", body.Slot),
 	})
 }
 
@@ -300,7 +300,7 @@ func (s *Server) handleColumns(w http.ResponseWriter, r *http.Request) {
 	table := r.URL.Query().Get("table")
 	sampleJSON := r.URL.Query().Get("sample_json") != "0"
 	if schema == "" || table == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("缺少 schema �?table"))
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("缺少 schema 或 table"))
 		return
 	}
 	c, err := loadConfig(s.ConfigPath)
@@ -387,13 +387,13 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if body.FullDump {
 		c, err := loadConfig(s.ConfigPath)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, fmt.Errorf("读取配置失败，无法全�?dump: %w", err))
+			writeErr(w, http.StatusInternalServerError, fmt.Errorf("读取配置失败，无法全量 dump: %w", err))
 			return
 		}
 		dataDir, _, _ := syncStateFromConfig(c)
 
 		if name == "" {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("全量 dump 需要配�?restart-container（Docker 先停再删位点�?))
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("全量 dump 需要配置 restart-container（Docker 先停再删位点）"))
 			return
 		}
 		if err := dockerStop(name); err != nil {
@@ -408,14 +408,14 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("full_dump: stopped %s, removed %s", name, p)
 		if err := dockerStart(name); err != nil {
-			writeErr(w, http.StatusBadGateway, fmt.Errorf("已删除位�?%s，但启动容器失败: %w", p, err))
+			writeErr(w, http.StatusBadGateway, fmt.Errorf("已删除位点 %s，但启动容器失败: %w", p, err))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"ok":        "restarted",
 			"method":    "docker-stop-clear-start",
 			"container": name,
-			"message":   fmt.Sprintf("已停止容器、删�?%s 并重新启动，将执行全�?dump�?, p),
+			"message":   fmt.Sprintf("已停止容器、删除 %s 并重新启动，将执行全量 dump。", p),
 		})
 		return
 	}
@@ -430,7 +430,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 				"ok":        "restarted",
 				"method":    "docker",
 				"container": name,
-				"message":   "已通过 Docker API 重启同步容器，新配置即将生效�?,
+				"message":   "已通过 Docker API 重启同步容器，新配置即将生效。",
 			})
 			return
 		}
@@ -444,7 +444,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"ok":      "restarted",
 		"method":  "self-exit",
-		"message": "已通知同步进程退出，Docker 将自动重新拉起（�?docker API 不可用则走此方式）�?,
+		"message": "已通知同步进程退出，Docker 将自动重新拉起（若 docker API 不可用则走此方式）。",
 	})
 }
 
@@ -477,13 +477,13 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	case "buffer", "memory":
 		base := strings.TrimRight(s.SyncLogURL, "/")
 		if base == "" {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("未配�?sync-log-url"))
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("未配置 sync-log-url"))
 			return
 		}
 		reqURL := fmt.Sprintf("%s?tail=%s&filter=%s", base, tail, url.QueryEscape(filter))
 		resp, err := http.Get(reqURL)
 		if err != nil {
-			writeErr(w, http.StatusBadGateway, fmt.Errorf("读取进程内日志失败（请确认同步服�?/logs 可访问）: %w", err))
+			writeErr(w, http.StatusBadGateway, fmt.Errorf("读取进程内日志失败（请确认同步服务 /logs 可访问）: %w", err))
 			return
 		}
 		defer resp.Body.Close()
@@ -496,13 +496,13 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	default:
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("source 仅支�?buffer �?docker"))
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("source 仅支持 buffer 或 docker"))
 	}
 }
 
 func dockerLogs(container, tail, filter string) ([]string, error) {
 	if container == "" {
-		return nil, fmt.Errorf("未配�?restart-container")
+		return nil, fmt.Errorf("未配置 restart-container")
 	}
 	client, err := dockerHTTPClient()
 	if err != nil {
@@ -516,7 +516,7 @@ func dockerLogs(container, tail, filter string) ([]string, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("调用 Docker logs 失败（请确认已挂�?/var/run/docker.sock�? %w", err)
+		return nil, fmt.Errorf("调用 Docker logs 失败（请确认已挂载 /var/run/docker.sock）: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -574,7 +574,7 @@ func dockerHTTPClient() (*http.Client, error) {
 		sock = "unix:///var/run/docker.sock"
 	}
 	if !strings.HasPrefix(sock, "unix://") {
-		return nil, fmt.Errorf("仅支�?unix socket，当�?DOCKER_HOST=%s", sock)
+		return nil, fmt.Errorf("仅支持 unix socket，当前 DOCKER_HOST=%s", sock)
 	}
 	path := strings.TrimPrefix(sock, "unix://")
 	transport := &http.Transport{
@@ -637,7 +637,7 @@ func dockerContainerAction(container, action, query string) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("调用 Docker API 失败（请确认已挂�?/var/run/docker.sock�? %w", err)
+		return fmt.Errorf("调用 Docker API 失败（请确认已挂载 /var/run/docker.sock）: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -652,7 +652,7 @@ func syncSelfRestart(syncLogURL string) error {
 	base := strings.TrimRight(syncLogURL, "/")
 	base = strings.TrimSuffix(base, "/logs")
 	if base == "" {
-		return fmt.Errorf("未配�?sync-log-url，无法自重启")
+		return fmt.Errorf("未配置 sync-log-url，无法自重启")
 	}
 	apiURL := base + "/admin/restart"
 	resp, err := http.Post(apiURL, "application/json", strings.NewReader("{}"))
