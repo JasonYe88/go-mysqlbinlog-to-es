@@ -69,7 +69,7 @@ func handleSelfRestart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"ok":      "restarting",
-		"message": "同步进程即将退出并�?Docker 自动拉起",
+		"message": "同步进程即将退出并重启Docker 自动拉起",
 	})
 	go func() {
 		time.Sleep(300 * time.Millisecond)
