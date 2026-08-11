@@ -293,6 +293,13 @@ func (r *River) Run() error {
 	go r.syncLoop()
 
 	pos := r.master.Position()
+	// 全量 dump 阶段会先输出，binlog position 在 dump 完成后才会有
+	if pos.Name == "" && pos.Pos == 0 {
+		log.Infof("====== [FULL DUMP] 阶段开始 ======")
+		log.Infof("全量同步中 (mysqldump)，完成后将自动进入增量同步...")
+		log.Infof("====== [FULL DUMP] 阶段 ======")
+	}
+
 	if err := r.canal.RunFrom(pos); err != nil {
 		log.Errorf("start canal err %v", err)
 		canalSyncState.Set(0)
