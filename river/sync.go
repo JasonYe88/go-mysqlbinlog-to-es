@@ -105,6 +105,40 @@ func (h *eventHandler) String() string {
 	return "ESRiverEventHandler"
 }
 
+// shouldQuickRetry 判断错误是否应该快速重试（短暂错误如 429、连接问题等）
+func shouldQuickRetry(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+
+	// 短暂性错误，应该快速重试
+	quickRetryErrors := []string{
+		"429",
+		"rate limit",
+		"too many requests",
+		"connection refused",
+		"connection reset",
+		"connection timed out",
+		"timeout",
+		"no such host",
+		"i/o timeout",
+		"use of closed",
+		"server misbehaving",
+		"503",
+		"504",
+		"502",
+		"gateway",
+	}
+
+	for _, keyword := range quickRetryErrors {
+		if strings.Contains(errStr, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *River) syncLoop() {
 	bulkSize := r.c.BulkSize
 	if bulkSize == 0 {
@@ -120,10 +154,28 @@ func (r *River) syncLoop() {
 	defer ticker.Stop()
 	defer r.wg.Done()
 
-	lastSavedTime := time.Now()
+	// 每3秒保存位点
+	posSaveTicker := time.NewTicker(3 * time.Second)
+	defer posSaveTicker.Stop()
+
 	reqs := make([]*elastic.BulkRequest, 0, 1024)
 
+	// 待处理的请求（ES 失败时保留）
+	var pendingReqs []*elastic.BulkRequest
+
 	var pos mysql.Position
+
+	// 错误重试状态
+	const (
+		maxRetries     = 10      // 最多重试10次
+		initialDelay   = 100     // 毫秒
+		maxDelay       = 5000    // 毫秒，最大单次等待5秒
+		maxTotalDelay  = 30000   // 毫秒，最大总等待时间30秒
+	)
+	delay := initialDelay
+	totalDelay := 0
+	retryCount := 0
+	consecutiveErrors := 0
 
 	for {
 		needFlush := false
@@ -133,39 +185,95 @@ func (r *River) syncLoop() {
 		case v := <-r.syncCh:
 			switch v := v.(type) {
 			case posSaver:
-				now := time.Now()
-				if v.force || now.Sub(lastSavedTime) > 3*time.Second {
-					lastSavedTime = now
-					needFlush = true
-					needSavePos = true
-					pos = v.pos
-				}
+				pos = v.pos
+				// 总是标记需要保存位点
+				needSavePos = true
 			case []*elastic.BulkRequest:
 				reqs = append(reqs, v...)
 				needFlush = len(reqs) >= bulkSize
 			}
 		case <-ticker.C:
-			needFlush = true
+			needFlush = len(reqs) > 0 || len(pendingReqs) > 0
+		case <-posSaveTicker.C:
+			// 定期保存位点（不等待 ES 结果）
+			needSavePos = true
 		case <-r.ctx.Done():
+			// 收到退出信号，先保存最后的位置
+			if err := r.master.Save(pos); err != nil {
+				log.Errorf("save sync position on exit err %v", err)
+			}
 			return
 		}
 
-		if needFlush {
-			// TODO: retry some times?
-			if err := r.doBulk(reqs); err != nil {
-				log.Errorf("do ES bulk err %v, close sync", err)
-				r.cancel()
-				return
-			}
-			reqs = reqs[0:0]
-		}
-
+		// 定期保存位点（优先级最高，即使 ES 失败也要保存）
 		if needSavePos {
 			if err := r.master.Save(pos); err != nil {
-				log.Errorf("save sync position %s err %v, close sync", pos, err)
-				r.cancel()
-				return
+				log.Errorf("save sync position %s err %v", pos, err)
 			}
+		}
+
+		// 处理待处理的请求（之前 ES 失败时保留的）
+		if len(pendingReqs) > 0 {
+			reqs = append(reqs, pendingReqs...)
+			pendingReqs = nil
+			needFlush = true
+		}
+
+		if needFlush && len(reqs) > 0 {
+			// 发送 ES 请求
+			if err := r.doBulk(reqs); err != nil {
+				consecutiveErrors++
+
+				// 记录错误但继续运行，不丢数据
+				log.Errorf("do ES bulk err %v (consecutive errors: %d), preserving %d docs",
+					err, consecutiveErrors, len(reqs))
+
+				// 保存待处理的请求，防止数据丢失
+				pendingReqs = append(pendingReqs, reqs...)
+				reqs = reqs[0:0]
+
+				// 如果是短暂错误（429等），快速重试
+				if shouldQuickRetry(err) && retryCount < maxRetries && totalDelay < maxTotalDelay {
+					waitTime := delay
+					if totalDelay+delay > maxTotalDelay {
+						waitTime = maxTotalDelay - totalDelay
+					}
+					if waitTime > 0 {
+						time.Sleep(time.Duration(waitTime) * time.Millisecond)
+						totalDelay += waitTime
+					}
+					delay = delay * 2
+					if delay > maxDelay {
+						delay = maxDelay
+					}
+					retryCount++
+					continue
+				}
+
+				// 重置重试状态
+				retryCount = 0
+				delay = initialDelay
+				totalDelay = 0
+			} else {
+				// 成功，重置状态
+				if consecutiveErrors > 0 {
+					log.Infof("ES bulk success, recovered after %d consecutive errors", consecutiveErrors)
+				}
+				consecutiveErrors = 0
+				retryCount = 0
+				delay = initialDelay
+				totalDelay = 0
+				reqs = reqs[0:0]
+			}
+		}
+
+		// 队列堆积告警
+		queueLen := len(r.syncCh)
+		if queueLen > 1000 {
+			log.Warnf("sync queue backlog: %d items, ES may be slow", queueLen)
+		}
+		if queueLen > 5000 {
+			log.Errorf("sync queue backlog critical: %d items, data may be delayed", queueLen)
 		}
 	}
 }
@@ -515,21 +623,144 @@ func (r *River) doBulk(reqs []*elastic.BulkRequest) error {
 		return nil
 	}
 
-	if resp, err := r.es.Bulk(reqs); err != nil {
-		log.Errorf("sync docs err %v after binlog %s", err, r.canal.SyncedPosition())
-		return errors.Trace(err)
-	} else if resp.Code/100 == 2 || resp.Errors {
-		for i := 0; i < len(resp.Items); i++ {
-			for action, item := range resp.Items[i] {
-				if len(item.Error) > 0 {
-					log.Errorf("%s index: %s, type: %s, id: %s, status: %d, error: %s",
-						action, item.Index, item.Type, item.ID, item.Status, item.Error)
-				}
-			}
-		}
+	// 重试配置 - 限制总等待时间避免阻塞
+	const (
+		maxRetries     = 5       // 最多重试5次
+		initialDelay   = 100     // 毫秒
+		maxDelay       = 2000    // 毫秒，最大单次等待2秒
+		maxTotalDelay  = 10000   // 毫秒，最大总等待时间10秒
+	)
+
+	// 可重试的 HTTP 错误码
+	// 429: ES 限流
+	// 503: ES 服务不可用
+	// 504: ES 网关超时
+	// 502: ES 网关错误
+	isRetryableHTTPError := func(code int) bool {
+		return code == 429 || code == 502 || code == 503 || code == 504
 	}
 
-	return nil
+	// 可重试的网络错误（需要检查 err 中的关键字）
+	isRetryableNetworkError := func(errStr string) bool {
+		retryableErrors := []string{
+			"connection refused",
+			"connection reset",
+			"connection timed out",
+			"timeout",
+			"no such host",
+			"i/o timeout",
+			"use of closed",
+			"server misbehaving",
+		}
+		errLower := strings.ToLower(errStr)
+		for _, keyword := range retryableErrors {
+			if strings.Contains(errLower, keyword) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var lastErr error
+	delay := initialDelay
+	totalDelay := 0
+
+	for retry := 0; retry <= maxRetries; retry++ {
+		if resp, err := r.es.Bulk(reqs); err != nil {
+			lastErr = err
+			errStr := err.Error()
+
+			// 网络错误，触发重试
+			if isRetryableNetworkError(errStr) {
+				lastErr = errors.Errorf("ES network error: %v", err)
+				if retry < maxRetries && totalDelay < maxTotalDelay {
+					waitTime := delay
+					if totalDelay+delay > maxTotalDelay {
+						waitTime = maxTotalDelay - totalDelay
+					}
+					if waitTime > 0 {
+						log.Warnf("ES network error, retrying in %dms (retry %d/%d, total wait: %dms): %v", waitTime, retry+1, maxRetries, totalDelay+waitTime, err)
+						time.Sleep(time.Duration(waitTime) * time.Millisecond)
+						totalDelay += waitTime
+					}
+					delay = delay * 2
+					if delay > maxDelay {
+						delay = maxDelay
+					}
+					continue
+				}
+				if totalDelay >= maxTotalDelay {
+					log.Errorf("ES network error exceeded max total wait time (%dms): %v", maxTotalDelay, err)
+				}
+			} else {
+				// 不可重试的错误（如认证失败、格式错误等）
+				log.Errorf("ES non-retryable error: %v", err)
+				return errors.Trace(err)
+			}
+		} else if isRetryableHTTPError(resp.Code) {
+			// HTTP 可重试错误码
+			errorNames := map[int]string{
+				429: "Too Many Requests (rate limit)",
+				502: "Bad Gateway",
+				503: "Service Unavailable",
+				504: "Gateway Timeout",
+			}
+			errorName := errorNames[resp.Code]
+			if errorName == "" {
+				errorName = fmt.Sprintf("HTTP %d", resp.Code)
+			}
+			lastErr = errors.Errorf("ES %s", errorName)
+
+			if retry < maxRetries && totalDelay < maxTotalDelay {
+				waitTime := delay
+				if totalDelay+delay > maxTotalDelay {
+					waitTime = maxTotalDelay - totalDelay
+				}
+				if waitTime > 0 {
+					log.Warnf("ES %s, retrying in %dms (retry %d/%d, total wait: %dms)", errorName, waitTime, retry+1, maxRetries, totalDelay+waitTime)
+					time.Sleep(time.Duration(waitTime) * time.Millisecond)
+					totalDelay += waitTime
+				}
+				delay = delay * 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+				continue
+			}
+			if totalDelay >= maxTotalDelay {
+				log.Errorf("ES %s exceeded max total wait time (%dms)", errorName, maxTotalDelay)
+			}
+		} else if resp.Code/100 == 2 || resp.Errors {
+			// 成功响应（2xx），检查是否有部分错误
+			for i := 0; i < len(resp.Items); i++ {
+				for action, item := range resp.Items[i] {
+					if len(item.Error) > 0 {
+						// 区分可重试和不可重试的文档错误
+						errMsg := string(item.Error)
+						if strings.Contains(errMsg, "version_conflict") ||
+							strings.Contains(errMsg, "routing_missing_exception") {
+							// 这些错误可以重试，但不阻塞同步
+							log.Warnf("%s index: %s, type: %s, id: %s, status: %d, error: %s (non-blocking)",
+								action, item.Index, item.Type, item.ID, item.Status, item.Error)
+						} else {
+							// 不可重试的文档错误
+							log.Errorf("%s index: %s, type: %s, id: %s, status: %d, error: %s",
+								action, item.Index, item.Type, item.ID, item.Status, item.Error)
+						}
+					}
+				}
+			}
+			// 即使有部分错误，也认为 bulk 请求成功，继续处理
+			return nil
+		} else {
+			lastErr = errors.Errorf("ES bulk failed with code %d", resp.Code)
+		}
+
+		// 非重试错误，直接返回
+		return errors.Trace(lastErr)
+	}
+
+	return errors.Trace(lastErr)
 }
 
 // get mysql field value and convert it to specific value to es
