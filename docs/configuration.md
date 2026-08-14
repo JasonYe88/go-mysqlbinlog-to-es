@@ -47,7 +47,8 @@ river.toml
 | `flavor` | 是 | `mysql` 或 `mariadb` | `mysql` |
 | `mysqldump` | 建议 | 全量工具；`""` 跳过 dump | `mysqldump` |
 | `skip_master_data` | 否 | 无 `--master-data` 权限时 | `true` |
-| `bulk_size` | 否 | Bulk 条数；`0`=默认 | `0` |
+| `bulk_size` | 否 | Bulk 条数；`0`=默认 128 | `128` |
+| `flush_bulk_time` | 否 | 批量刷新超时；`0`=默认 200ms | `"200ms"` |
 | `skip_no_pk_table` | 否 | 跳过无主键表 | `false` |
 
 ### 与本项目测试环境对应关系（已脱敏）
