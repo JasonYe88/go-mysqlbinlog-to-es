@@ -13,6 +13,9 @@ import (
 	"github.com/JasonYe88/go-mysqlbinlog-to-es/river"
 )
 
+// 全局日志写入器，用于程序退出时关闭
+var globalLogWriter *river.DailyLogWriter
+
 var configFile = flag.String("config", "./configs/river.toml", "go-mysqlbinlog-to-es config file")
 var my_addr = flag.String("my_addr", "", "MySQL addr")
 var my_user = flag.String("my_user", "", "MySQL user")
@@ -23,6 +26,8 @@ var server_id = flag.Int("server_id", 0, "MySQL server id, as a pseudo slave")
 var flavor = flag.String("flavor", "", "flavor: mysql or mariadb")
 var execution = flag.String("exec", "", "mysqldump execution path")
 var logLevel = flag.String("log_level", "info", "log level")
+var logDir = flag.String("log_dir", "logs", "log directory")
+var logMaxDays = flag.Int("log_max_days", 7, "max days to keep logs, 0 means no cleanup")
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -98,10 +103,27 @@ func main() {
 
 	r.Close()
 	<-done
+
+	// 关闭日志写入器
+	if globalLogWriter != nil {
+		globalLogWriter.Close()
+	}
 }
 
 func setupLogRing(level string) {
-	mw := io.MultiWriter(os.Stdout, river.GlobalLogRing)
+	var writers []io.Writer
+	writers = append(writers, os.Stdout, river.GlobalLogRing)
+
+	// 创建按天分割的日志文件
+	logWriter, err := river.NewDailyLogWriter(*logDir, "sync", *logMaxDays)
+	if err != nil {
+		log.Warnf("create daily log writer failed: %v, only output to stdout", err)
+	} else {
+		globalLogWriter = logWriter
+		writers = append(writers, logWriter)
+	}
+
+	mw := io.MultiWriter(writers...)
 	h, err := log.NewStreamHandler(mw)
 	if err != nil {
 		log.SetLevelByName(level)
