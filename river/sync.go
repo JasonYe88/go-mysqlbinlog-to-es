@@ -363,16 +363,11 @@ func (r *River) makeUpdateRequest(rule *Rule, rows [][]interface{}) ([]*elastic.
 			esDeleteNum.WithLabelValues(rule.Index).Inc()
 			esInsertNum.WithLabelValues(rule.Index).Inc()
 		} else {
-			// Pipeline and nested path mapping need a full document write:
-			// ES update merge is shallow and would corrupt nested dest objects.
-			if len(rule.Pipeline) > 0 || rule.hasPathMapping() {
-				r.makeInsertReqData(req, rule, rows[i+1])
-				req.Action = elastic.ActionIndex
-				req.Pipeline = rule.Pipeline
-			} else {
-				r.makeUpdateReqData(req, rule, rows[i], rows[i+1])
-			}
-			esUpdateNum.WithLabelValues(rule.Index).Inc()
+			// 改为覆盖写入（ActionIndex），避免 UPDATE 时文档不存在返回 404
+			// 这允许通过 UPDATE 补录缺失的数据
+			r.makeInsertReqData(req, rule, rows[i+1])
+			req.Action = elastic.ActionIndex
+			esInsertNum.WithLabelValues(rule.Index).Inc()
 		}
 
 		reqs = append(reqs, req)
