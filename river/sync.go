@@ -623,10 +623,10 @@ func (r *River) doBulk(reqs []*elastic.BulkRequest) error {
 
 	// 重试配置 - 限制总等待时间避免阻塞
 	const (
-		maxRetries     = 5       // 最多重试5次
-		initialDelay   = 100     // 毫秒
-		maxDelay       = 2000    // 毫秒，最大单次等待2秒
-		maxTotalDelay  = 10000   // 毫秒，最大总等待时间10秒
+		maxRetries    = 10      // 最多重试10次
+		initialDelay  = 100     // 毫秒
+		maxDelay      = 5000    // 毫秒，最大单次等待5秒
+		maxTotalDelay = 60000   // 毫秒，最大总等待时间60秒
 	)
 
 	// 可重试的 HTTP 错误码
@@ -659,12 +659,31 @@ func (r *River) doBulk(reqs []*elastic.BulkRequest) error {
 		return false
 	}
 
+	// 单文档级别的可重试错误（HTTP 200 但部分文档失败）
+	// 主要场景：ES 内存熔断 (circuit_breaking) 时返回 429
+	isDocRetryableError := func(item *elastic.BulkResponseItem) bool {
+		if item == nil {
+			return false
+		}
+		// 状态码 429：限流
+		if item.Status == 429 {
+			return true
+		}
+		// 内容包含 circuit_breaking 或 data too large
+		errMsg := strings.ToLower(string(item.Error))
+		return strings.Contains(errMsg, "circuit_breaking") ||
+			strings.Contains(errMsg, "data too large")
+	}
+
 	var lastErr error
 	delay := initialDelay
 	totalDelay := 0
 
+	// 当前要发送的请求（可能因单文档重试而缩减）
+	currentReqs := reqs
+
 	for retry := 0; retry <= maxRetries; retry++ {
-		if resp, err := r.es.Bulk(reqs); err != nil {
+		if resp, err := r.es.Bulk(currentReqs); err != nil {
 			lastErr = err
 			errStr := err.Error()
 
@@ -730,25 +749,59 @@ func (r *River) doBulk(reqs []*elastic.BulkRequest) error {
 			}
 		} else if resp.Code/100 == 2 || resp.Errors {
 			// 成功响应（2xx），检查是否有部分错误
+			// 先记录所有文档错误，然后收集可重试的文档
+			var retriedReqs []*elastic.BulkRequest
 			for i := 0; i < len(resp.Items); i++ {
 				for action, item := range resp.Items[i] {
-					if len(item.Error) > 0 {
-						// 区分可重试和不可重试的文档错误
-						errMsg := string(item.Error)
-						if strings.Contains(errMsg, "version_conflict") ||
-							strings.Contains(errMsg, "routing_missing_exception") {
-							// 这些错误可以重试，但不阻塞同步
-							log.Warnf("%s index: %s, type: %s, id: %s, status: %d, error: %s (non-blocking)",
-								action, item.Index, item.Type, item.ID, item.Status, item.Error)
-						} else {
-							// 不可重试的文档错误
-							log.Errorf("%s index: %s, type: %s, id: %s, status: %d, error: %s",
-								action, item.Index, item.Type, item.ID, item.Status, item.Error)
+					if len(item.Error) == 0 {
+						continue
+					}
+					errMsg := string(item.Error)
+					if isDocRetryableError(item) {
+						// 可重试的单文档错误（429/circuit_breaking）
+						if i < len(currentReqs) {
+							retriedReqs = append(retriedReqs, currentReqs[i])
 						}
+						log.Warnf("%s index: %s, type: %s, id: %s, status: %d, error: %s (will retry)",
+							action, item.Index, item.Type, item.ID, item.Status, item.Error)
+					} else if strings.Contains(errMsg, "version_conflict") ||
+						strings.Contains(errMsg, "routing_missing_exception") {
+						// 这些错误可以忽略，不阻塞同步
+						log.Warnf("%s index: %s, type: %s, id: %s, status: %d, error: %s (non-blocking)",
+							action, item.Index, item.Type, item.ID, item.Status, item.Error)
+					} else {
+						// 不可重试的文档错误
+						log.Errorf("%s index: %s, type: %s, id: %s, status: %d, error: %s",
+							action, item.Index, item.Type, item.ID, item.Status, item.Error)
 					}
 				}
 			}
-			// 即使有部分错误，也认为 bulk 请求成功，继续处理
+
+			// 如果有可重试的单文档错误，单独重试这部分
+			if len(retriedReqs) > 0 && retry < maxRetries && totalDelay < maxTotalDelay {
+				waitTime := delay
+				if totalDelay+delay > maxTotalDelay {
+					waitTime = maxTotalDelay - totalDelay
+				}
+				if waitTime > 0 {
+					log.Warnf("ES single-doc errors (429/circuit_breaking), retrying %d docs in %dms (retry %d/%d, total wait: %dms)",
+						len(retriedReqs), waitTime, retry+1, maxRetries, totalDelay+waitTime)
+					time.Sleep(time.Duration(waitTime) * time.Millisecond)
+					totalDelay += waitTime
+				}
+				delay = delay * 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+				// 下次只发送失败的文档
+				currentReqs = retriedReqs
+				continue
+			}
+
+			// 没有可重试的错误，或重试已用尽，结束
+			if len(retriedReqs) > 0 {
+				log.Errorf("ES single-doc retries exhausted, %d docs dropped: see previous warnings", len(retriedReqs))
+			}
 			return nil
 		} else {
 			lastErr = errors.Errorf("ES bulk failed with code %d", resp.Code)
