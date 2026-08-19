@@ -26,6 +26,20 @@ docker compose logs -f go-mysqlbinlog-to-es
 
 Admin 与 sync 均挂载 `../var`，以便界面勾选「全量 dump」时删除共享的 `master.info`。
 
+## 进程守护（防止意外退出）
+
+源码安装模式下，进程一旦崩溃就需要手动重启。可以使用 `nohup` + `while true` 守护进程，崩溃后自动重启：
+
+```bash
+nohup sh -c 'while true; do ./go-mysqlbinlog-to-es -config=configs/river.toml -log_dir=logs -log_max_days=7; echo "Process crashed/closed, restarting in 3 seconds..." >> logs/sync.log; sleep 3; done' > /dev/null 2>&1 &
+```
+
+- 进程异常退出时，shell 会在 3 秒后自动重新拉起
+- 重启信息会写入 `logs/sync.log`，便于事后排查
+- 使用 `pkill -f go-mysqlbinlog-to-es` 停止（外层 while 也会随 shell 终止）
+
+**建议**：生产环境优先使用 systemd 或 Docker 模式，它们自带进程守护；本方案仅在没有 systemd 的环境（如 Docker 容器内手动运行、临时调试）下使用。
+
 ## 同步异常中断处理
 
 ### 全量同步中断
@@ -87,8 +101,11 @@ docker compose logs -f go-mysqlbinlog-to-es | grep binlog
 
 ```bash
 # 增量同步中断后，直接重启即可
+# 如果使用了 nohup + while true 守护进程，只需 pkill 当前进程，外层循环会自动用相同参数重新拉起：
 pkill -f go-mysqlbinlog-to-es || true
-nohup ./go-mysqlbinlog-to-es -config=configs/river.toml > logs/sync.log 2>&1 &
+
+# 如果没有守护进程，则需要手动 nohup 启动：
+# nohup ./go-mysqlbinlog-to-es -config=configs/river.toml -log_dir=logs -log_max_days=7 > logs/sync.log 2>&1 &
 
 # 观察日志，确认从断点继续
 tail -f logs/sync.log | grep binlog
@@ -125,10 +142,15 @@ docker compose up -d go-mysqlbinlog-to-es
 # 访问 http://127.0.0.1:12802/ → 点击「重启同步服务」→ 勾选「全量 dump」→ 确认
 
 # 方法 2：手动操作
+# 如果使用了 nohup + while true 守护进程，只需 pkill 当前进程，外层循环会自动用相同参数重新拉起：
 pkill -f go-mysqlbinlog-to-es || true
 rm -f /app/var/master.info
-nohup ./go-mysqlbinlog-to-es -config=configs/river.toml > logs/sync.log 2>&1 &
+
+# 如果没有守护进程，则需要手动 nohup 启动：
+# nohup ./go-mysqlbinlog-to-es -config=configs/river.toml -log_dir=logs -log_max_days=7 > logs/sync.log 2>&1 &
 ```
+
+> 注意：必须与守护进程命令的参数完全一致（`-config`、`-log_dir`、`-log_max_days`），否则重启后会因配置不同而行为不一致。
 
 ---
 
@@ -161,9 +183,12 @@ docker logs -f go-mysqlbinlog-to-es
 **源码安装模式（Debian）**：
 
 ```bash
+# 如果使用了 nohup + while true 守护进程，只需 pkill 当前进程，外层循环会自动用相同参数重新拉起：
 pkill -f go-mysqlbinlog-to-es || true
 rm -f /app/var/master.info
-nohup ./go-mysqlbinlog-to-es -config=configs/river.toml > logs/sync.log 2>&1 &
+
+# 如果没有守护进程，则需要手动 nohup 启动：
+# nohup ./go-mysqlbinlog-to-es -config=configs/river.toml -log_dir=logs -log_max_days=7 > logs/sync.log 2>&1 &
 tail -f logs/sync.log
 ```
 
